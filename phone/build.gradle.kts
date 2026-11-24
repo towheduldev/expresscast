@@ -4,13 +4,13 @@ plugins {
 }
 
 android {
-    namespace = "com.expresscast.phone"
+    namespace = "dev.towhedul.expresscast"
     compileSdk {
         version = release(37)
     }
 
     defaultConfig {
-        applicationId = "com.expresscast.phone"
+        applicationId = "dev.towhedul.expresscast"
         minSdk = 29
         targetSdk = 37
         versionCode = 1

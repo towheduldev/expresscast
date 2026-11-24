@@ -4,13 +4,13 @@ plugins {
 }
 
 android {
-    namespace = "com.expresscast.tv"
+    namespace = "dev.towhedul.expresscast.tv"
     compileSdk {
         version = release(37)
     }
 
     defaultConfig {
-        applicationId = "com.expresscast.tv"
+        applicationId = "dev.towhedul.expresscast.tv"
         minSdk = 26
         targetSdk = 37
         versionCode = 1

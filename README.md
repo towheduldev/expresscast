@@ -28,13 +28,10 @@ No cloud servers, no account login, no ads, and no telemetry—video streams dir
 
 ```text
 ExpressCast/
-├── phone/     # com.expresscast.phone — MediaProjection capture, H.264 encoder, NSD advertiser, UDP sender
-├── tv/        # com.expresscast.tv    — NSD browser, PIN display, UDP receiver, H.264 SurfaceView decoder
-├── shared/    # com.expresscast.shared — Pure Kotlin/JVM protocol, packet framing, reassembler, unit tests
-└── docs/      # Architecture & design notes
+├── phone/     # dev.towhedul.expresscast        — MediaProjection capture, H.264 encoder, audio capture, NSD advertiser, UDP sender
+├── tv/        # dev.towhedul.expresscast.tv     — NSD browser, PIN display, UDP video/audio receiver, H.264 SurfaceView decoder
+└── shared/    # dev.towhedul.expresscast.shared — Pure Kotlin/JVM protocol, packet framing, reassembler, unit tests
 ```
-
-See [docs/architecture.md](docs/architecture.md) for the full streaming pipeline, transport decision record, and compatibility notes.
 
 ---
 
