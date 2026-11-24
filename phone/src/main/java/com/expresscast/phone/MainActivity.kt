@@ -14,6 +14,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,6 +27,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -48,15 +51,21 @@ import com.expresscast.phone.network.NsdAdvertiser
 import com.expresscast.phone.network.NsdAdvertiserState
 import com.expresscast.phone.network.PhoneControlServer
 import com.expresscast.phone.network.PhoneServerUiState
+import com.expresscast.phone.settings.AspectCropMode
+import com.expresscast.phone.settings.CastSettings
+import com.expresscast.phone.settings.CastSettingsRepository
+import com.expresscast.phone.settings.ResolutionPreset
 import com.expresscast.phone.ui.theme.ExpressCastTheme
 import com.expresscast.shared.ConnectionState
 import com.expresscast.shared.NetworkConfig
 import com.expresscast.shared.ProtocolInfo
-import com.expresscast.shared.VideoStreamConfig
 
 class MainActivity : ComponentActivity() {
     private lateinit var controlServer: PhoneControlServer
     private lateinit var nsdAdvertiser: NsdAdvertiser
+    private lateinit var settingsRepository: CastSettingsRepository
+
+    private var currentSettings: CastSettings = CastSettings()
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -70,27 +79,36 @@ class MainActivity : ComponentActivity() {
         val data = result.data
         val tvHost = controlServer.state.value.connectedTvAddress
         if (result.resultCode == Activity.RESULT_OK && data != null && !tvHost.isNullOrBlank()) {
+            val dm = resources.displayMetrics
+            val streamConfig = currentSettings.toVideoStreamConfig(dm.widthPixels, dm.heightPixels)
             val intent = Intent(this, ScreenCaptureService::class.java).apply {
                 action = ScreenCaptureService.ACTION_START
                 putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, result.resultCode)
                 putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, data)
                 putExtra(ScreenCaptureService.EXTRA_TARGET_HOST, tvHost)
                 putExtra(ScreenCaptureService.EXTRA_VIDEO_PORT, NetworkConfig.DEFAULT_VIDEO_PORT)
+                putExtra(ScreenCaptureService.EXTRA_STREAM_WIDTH, streamConfig.width)
+                putExtra(ScreenCaptureService.EXTRA_STREAM_HEIGHT, streamConfig.height)
+                putExtra(ScreenCaptureService.EXTRA_STREAM_FPS, streamConfig.fps)
+                putExtra(ScreenCaptureService.EXTRA_STREAM_BITRATE, streamConfig.bitrateBps)
+                putExtra(ScreenCaptureService.EXTRA_CROP_MODE, currentSettings.cropMode.name)
             }
             startForegroundService(intent)
-            controlServer.sendStartStream(VideoStreamConfig.DEFAULT, NetworkConfig.DEFAULT_VIDEO_PORT)
+            controlServer.sendStartStream(streamConfig, NetworkConfig.DEFAULT_VIDEO_PORT)
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        settingsRepository = CastSettingsRepository(this)
+        currentSettings = settingsRepository.load()
+
         controlServer = PhoneControlServer()
         controlServer.onKeyframeRequested = {
             ScreenCaptureService.requestKeyframe(this)
         }
         nsdAdvertiser = NsdAdvertiser(this)
 
-        // Start advertising immediately so the TV can discover the phone right away
         controlServer.start()
         nsdAdvertiser.start(port = controlServer.state.value.port)
 
@@ -100,12 +118,19 @@ class MainActivity : ComponentActivity() {
                 val serverState by controlServer.state.collectAsState()
                 val nsdState by nsdAdvertiser.state.collectAsState()
                 val captureStatus by ScreenCaptureService.status.collectAsState()
+                var settings by remember { mutableStateOf(currentSettings) }
 
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     PhoneCastScreen(
                         serverState = serverState,
                         nsdState = nsdState,
                         captureStatus = captureStatus,
+                        settings = settings,
+                        onSettingsChanged = { updated ->
+                            settings = updated
+                            currentSettings = updated
+                            settingsRepository.save(updated)
+                        },
                         onStartServer = {
                             controlServer.start()
                             nsdAdvertiser.start(port = controlServer.state.value.port)
@@ -156,11 +181,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PhoneCastScreen(
     serverState: PhoneServerUiState,
     nsdState: NsdAdvertiserState,
     captureStatus: CaptureStatus,
+    settings: CastSettings,
+    onSettingsChanged: (CastSettings) -> Unit,
     onStartServer: () -> Unit,
     onStopServer: () -> Unit,
     onSubmitPin: (String) -> Unit,
@@ -178,6 +206,7 @@ fun PhoneCastScreen(
 
     val isPaired = serverState.connectionState == ConnectionState.Connected ||
         serverState.connectionState == ConnectionState.Streaming
+    val canEditSettings = !captureStatus.isStreaming
 
     Column(
         modifier = modifier
@@ -316,6 +345,70 @@ fun PhoneCastScreen(
                             text = it,
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text("Stream Settings", style = MaterialTheme.typography.titleMedium)
+                if (!canEditSettings) {
+                    Text(
+                        text = "Stop casting to change stream settings.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Text("Aspect / Crop", style = MaterialTheme.typography.labelLarge)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AspectCropMode.entries.forEach { mode ->
+                        FilterChip(
+                            selected = settings.cropMode == mode,
+                            onClick = { onSettingsChanged(settings.copy(cropMode = mode)) },
+                            enabled = canEditSettings,
+                            label = { Text(mode.label) }
+                        )
+                    }
+                }
+
+                Text("Resolution", style = MaterialTheme.typography.labelLarge)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ResolutionPreset.entries.forEach { preset ->
+                        FilterChip(
+                            selected = settings.resolution == preset,
+                            onClick = { onSettingsChanged(settings.copy(resolution = preset)) },
+                            enabled = canEditSettings,
+                            label = { Text(preset.label) }
+                        )
+                    }
+                }
+
+                Text("Target FPS", style = MaterialTheme.typography.labelLarge)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(30, 60).forEach { targetFps ->
+                        FilterChip(
+                            selected = settings.fps == targetFps,
+                            onClick = { onSettingsChanged(settings.copy(fps = targetFps)) },
+                            enabled = canEditSettings,
+                            label = { Text("$targetFps fps") }
+                        )
+                    }
+                }
+
+                Text("Bitrate", style = MaterialTheme.typography.labelLarge)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(4, 6, 10, 15).forEach { mbps ->
+                        FilterChip(
+                            selected = settings.bitrateMbps == mbps,
+                            onClick = { onSettingsChanged(settings.copy(bitrateMbps = mbps)) },
+                            enabled = canEditSettings,
+                            label = { Text("$mbps Mbps") }
                         )
                     }
                 }

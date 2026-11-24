@@ -18,6 +18,7 @@ import android.os.IBinder
 import android.util.Log
 import com.expresscast.phone.codec.HardwareH264Encoder
 import com.expresscast.phone.network.UdpVideoSender
+import com.expresscast.phone.settings.AspectCropMode
 import com.expresscast.shared.NetworkConfig
 import com.expresscast.shared.VideoPacketHeader
 import com.expresscast.shared.VideoStreamConfig
@@ -39,6 +40,7 @@ data class CaptureStatus(
 class ScreenCaptureService : Service() {
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
+    private var cropProcessor: CropSurfaceProcessor? = null
     private var encoder: HardwareH264Encoder? = null
     private var udpSender: UdpVideoSender? = null
     private var wifiLock: WifiManager.WifiLock? = null
@@ -60,6 +62,14 @@ class ScreenCaptureService : Service() {
                 }
                 val targetHost = intent.getStringExtra(EXTRA_TARGET_HOST)
                 val videoPort = intent.getIntExtra(EXTRA_VIDEO_PORT, NetworkConfig.DEFAULT_VIDEO_PORT)
+                val streamConfig = VideoStreamConfig(
+                    width = intent.getIntExtra(EXTRA_STREAM_WIDTH, VideoStreamConfig.DEFAULT.width),
+                    height = intent.getIntExtra(EXTRA_STREAM_HEIGHT, VideoStreamConfig.DEFAULT.height),
+                    fps = intent.getIntExtra(EXTRA_STREAM_FPS, VideoStreamConfig.DEFAULT.fps),
+                    bitrateBps = intent.getIntExtra(EXTRA_STREAM_BITRATE, VideoStreamConfig.DEFAULT.bitrateBps),
+                    keyframeIntervalSec = VideoStreamConfig.DEFAULT.keyframeIntervalSec
+                )
+                val cropMode = AspectCropMode.fromName(intent.getStringExtra(EXTRA_CROP_MODE))
 
                 if (resultCode != Activity.RESULT_OK || resultData == null || targetHost.isNullOrBlank()) {
                     Log.e(TAG, "Invalid ACTION_START parameters; stopping service")
@@ -69,7 +79,7 @@ class ScreenCaptureService : Service() {
                 }
 
                 startForegroundWithNotification()
-                startCapturePipeline(resultCode, resultData, targetHost, videoPort)
+                startCapturePipeline(resultCode, resultData, targetHost, videoPort, streamConfig, cropMode)
             }
 
             ACTION_REQUEST_KEYFRAME -> {
@@ -116,7 +126,9 @@ class ScreenCaptureService : Service() {
         resultCode: Int,
         resultData: Intent,
         targetHost: String,
-        videoPort: Int
+        videoPort: Int,
+        requestedConfig: VideoStreamConfig,
+        cropMode: AspectCropMode
     ) {
         stopCapturePipeline()
         try {
@@ -142,7 +154,7 @@ class ScreenCaptureService : Service() {
             udpSender = sender
 
             var frameCount = 0L
-            val h264Encoder = HardwareH264Encoder(VideoStreamConfig.DEFAULT) { data, ptsUs, frameFlags ->
+            val h264Encoder = HardwareH264Encoder(requestedConfig) { data, ptsUs, frameFlags ->
                 val isConfig = (frameFlags and VideoPacketHeader.FLAG_CODEC_CONFIG) != 0
                 val isKeyframe = (frameFlags and VideoPacketHeader.FLAG_KEYFRAME) != 0
                 if (isConfig) {
@@ -163,14 +175,30 @@ class ScreenCaptureService : Service() {
             val cfg = h264Encoder.activeConfig
             h264Encoder.start()
 
-            val densityDpi = resources.displayMetrics.densityDpi
+            val dm = resources.displayMetrics
+            val densityDpi = dm.densityDpi
+            val (captureW, captureH, captureSurface) = if (cropMode == AspectCropMode.NATIVE) {
+                Triple(cfg.width, cfg.height, h264Encoder.inputSurface)
+            } else {
+                val phoneAspect = dm.widthPixels.toFloat() / dm.heightPixels.coerceAtLeast(1)
+                val (capW, capH) = if (phoneAspect >= 1f) {
+                    makeEven((cfg.height * phoneAspect).toInt().coerceAtLeast(2)) to cfg.height
+                } else {
+                    val baseW = minOf(cfg.width, 720)
+                    baseW to makeEven((baseW / phoneAspect).toInt().coerceAtLeast(2))
+                }
+                val processor = CropSurfaceProcessor(capW, capH, cfg.width, cfg.height, h264Encoder.inputSurface)
+                cropProcessor = processor
+                Triple(capW, capH, processor.startAndGetInputSurface())
+            }
+
             virtualDisplay = projection.createVirtualDisplay(
                 "ExpressCastDisplay",
-                cfg.width,
-                cfg.height,
+                captureW,
+                captureH,
                 densityDpi,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                h264Encoder.inputSurface,
+                captureSurface,
                 null,
                 null
             )
@@ -181,7 +209,7 @@ class ScreenCaptureService : Service() {
                 framesEncoded = 0L,
                 error = null
             )
-            Log.i(TAG, "Capture pipeline started -> $targetHost:$videoPort (${cfg.width}x${cfg.height}@${cfg.fps})")
+            Log.i(TAG, "Capture pipeline started -> $targetHost:$videoPort (capture=${captureW}x${captureH}, encode=${cfg.width}x${cfg.height}@${cfg.fps}, crop=$cropMode)")
         } catch (e: Exception) {
             Log.e(TAG, "Failed starting capture pipeline", e)
             _status.value = CaptureStatus(error = e.message ?: "Capture start failed")
@@ -197,6 +225,9 @@ class ScreenCaptureService : Service() {
             Log.w(TAG, "Error releasing VirtualDisplay: ${e.message}")
         }
         virtualDisplay = null
+
+        cropProcessor?.release()
+        cropProcessor = null
 
         encoder?.stop()
         encoder = null
@@ -253,6 +284,13 @@ class ScreenCaptureService : Service() {
         const val EXTRA_RESULT_DATA = "result_data"
         const val EXTRA_TARGET_HOST = "target_host"
         const val EXTRA_VIDEO_PORT = "video_port"
+        const val EXTRA_STREAM_WIDTH = "stream_width"
+        const val EXTRA_STREAM_HEIGHT = "stream_height"
+        const val EXTRA_STREAM_FPS = "stream_fps"
+        const val EXTRA_STREAM_BITRATE = "stream_bitrate"
+        const val EXTRA_CROP_MODE = "crop_mode"
+
+        private fun makeEven(value: Int): Int = (value / 2) * 2
 
         private val _status = MutableStateFlow(CaptureStatus())
         val status: StateFlow<CaptureStatus> = _status.asStateFlow()
