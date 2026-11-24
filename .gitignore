@@ -1,0 +1,20 @@
+# Built & IDE files
+*.iml
+.gradle/
+.kotlin/
+*/build/
+/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+.idea/
+local.properties
+.DS_Store
+hs_err_pid*
+
+# Build outputs & signing keys
+*.apk
+*.aab
+*.ap_
+*.keystore
+*.jks
