@@ -16,8 +16,11 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
+import android.view.Display
 import androidx.core.content.ContextCompat
 import com.expresscast.phone.audio.AudioCaptureSender
 import com.expresscast.phone.codec.HardwareH264Encoder
@@ -49,6 +52,12 @@ class ScreenCaptureService : Service() {
     private var udpSender: UdpVideoSender? = null
     private var audioSender: AudioCaptureSender? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var displayListener: DisplayManager.DisplayListener? = null
+    private var activeCropMode: AspectCropMode = AspectCropMode.RATIO_16_9
+    private var activeEncodeWidth: Int = 0
+    private var activeEncodeHeight: Int = 0
+    private var currentCaptureWidth: Int = 0
+    private var currentCaptureHeight: Int = 0
 
     @Volatile
     private var cachedSpsPps: ByteArray? = null
@@ -186,20 +195,20 @@ class ScreenCaptureService : Service() {
 
             val dm = resources.displayMetrics
             val densityDpi = dm.densityDpi
+            activeCropMode = cropMode
+            activeEncodeWidth = cfg.width
+            activeEncodeHeight = cfg.height
+
             val (captureW, captureH, captureSurface) = if (cropMode == AspectCropMode.NATIVE) {
                 Triple(cfg.width, cfg.height, h264Encoder.inputSurface)
             } else {
-                val phoneAspect = dm.widthPixels.toFloat() / dm.heightPixels.coerceAtLeast(1)
-                val (capW, capH) = if (phoneAspect >= 1f) {
-                    makeEven((cfg.height * phoneAspect).toInt().coerceAtLeast(2)) to cfg.height
-                } else {
-                    val baseW = minOf(cfg.width, 720)
-                    baseW to makeEven((baseW / phoneAspect).toInt().coerceAtLeast(2))
-                }
+                val (capW, capH) = computeCaptureDimensions(dm.widthPixels, dm.heightPixels, cfg.width, cfg.height)
                 val processor = CropSurfaceProcessor(capW, capH, cfg.width, cfg.height, h264Encoder.inputSurface)
                 cropProcessor = processor
                 Triple(capW, capH, processor.startAndGetInputSurface())
             }
+            currentCaptureWidth = captureW
+            currentCaptureHeight = captureH
 
             virtualDisplay = projection.createVirtualDisplay(
                 "ExpressCastDisplay",
@@ -211,6 +220,7 @@ class ScreenCaptureService : Service() {
                 null,
                 null
             )
+            registerOrientationListener()
 
             if (audioEnabled) {
                 val hasAudioPerm = ContextCompat.checkSelfPermission(
@@ -242,6 +252,7 @@ class ScreenCaptureService : Service() {
     }
 
     private fun stopCapturePipeline() {
+        unregisterOrientationListener()
         try {
             virtualDisplay?.release()
         } catch (e: Exception) {
@@ -271,6 +282,56 @@ class ScreenCaptureService : Service() {
         releaseLowLatencyWifiLock()
         cachedSpsPps = null
         _status.value = CaptureStatus(isStreaming = false)
+    }
+
+    private fun computeCaptureDimensions(
+        displayWidth: Int,
+        displayHeight: Int,
+        encodeWidth: Int,
+        encodeHeight: Int
+    ): Pair<Int, Int> {
+        val phoneAspect = displayWidth.toFloat() / displayHeight.coerceAtLeast(1)
+        return if (phoneAspect >= 1f) {
+            makeEven((encodeHeight * phoneAspect).toInt().coerceAtLeast(2)) to encodeHeight
+        } else {
+            val baseW = minOf(encodeWidth, 720)
+            baseW to makeEven((baseW / phoneAspect).toInt().coerceAtLeast(2))
+        }
+    }
+
+    private fun registerOrientationListener() {
+        if (activeCropMode == AspectCropMode.NATIVE) return
+        val dm = getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager ?: return
+        val listener = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) = Unit
+            override fun onDisplayRemoved(displayId: Int) = Unit
+            override fun onDisplayChanged(displayId: Int) {
+                if (displayId != Display.DEFAULT_DISPLAY) return
+                val metrics = resources.displayMetrics
+                val (newW, newH) = computeCaptureDimensions(
+                    metrics.widthPixels,
+                    metrics.heightPixels,
+                    activeEncodeWidth,
+                    activeEncodeHeight
+                )
+                if (newW != currentCaptureWidth || newH != currentCaptureHeight) {
+                    currentCaptureWidth = newW
+                    currentCaptureHeight = newH
+                    virtualDisplay?.resize(newW, newH, metrics.densityDpi)
+                    cropProcessor?.updateCaptureSize(newW, newH)
+                    Log.i(TAG, "Resized VirtualDisplay for rotation -> ${newW}x${newH}")
+                }
+            }
+        }
+        displayListener = listener
+        dm.registerDisplayListener(listener, Handler(Looper.getMainLooper()))
+    }
+
+    private fun unregisterOrientationListener() {
+        val listener = displayListener ?: return
+        displayListener = null
+        val dm = getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager ?: return
+        dm.unregisterDisplayListener(listener)
     }
 
     private fun acquireLowLatencyWifiLock() {

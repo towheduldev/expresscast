@@ -25,8 +25,8 @@ import java.util.concurrent.TimeUnit
  * a [VirtualDisplay] capture surface onto the H.264 encoder's input [Surface].
  */
 class CropSurfaceProcessor(
-    private val captureWidth: Int,
-    private val captureHeight: Int,
+    @Volatile private var captureWidth: Int,
+    @Volatile private var captureHeight: Int,
     private val encodeWidth: Int,
     private val encodeHeight: Int,
     private val encoderInputSurface: Surface
@@ -63,6 +63,18 @@ class CropSurfaceProcessor(
         latch.await(3, TimeUnit.SECONDS)
         initError?.let { throw IllegalStateException("Failed to initialize GL cropper", it) }
         return requireNotNull(captureSurface) { "Capture surface not initialized" }
+    }
+
+    fun updateCaptureSize(newCaptureWidth: Int, newCaptureHeight: Int) {
+        if (released) return
+        glHandler.post {
+            if (released) return@post
+            captureWidth = newCaptureWidth
+            captureHeight = newCaptureHeight
+            surfaceTexture?.setDefaultBufferSize(newCaptureWidth, newCaptureHeight)
+            computeCenterCropMatrix()
+            Log.i(TAG, "Updated GL crop capture size to ${newCaptureWidth}x${newCaptureHeight}")
+        }
     }
 
     fun release() {
