@@ -19,6 +19,10 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    base {
+        archivesName.set("ExpressCast-TV-v${defaultConfig.versionName}")
+    }
+
     buildTypes {
         release {
             optimization {
