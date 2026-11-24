@@ -30,7 +30,9 @@ data class CastSettings(
     val resolution: ResolutionPreset = ResolutionPreset.P720,
     val fps: Int = 60,
     val bitrateMbps: Int = 6,
-    val cropMode: AspectCropMode = AspectCropMode.RATIO_16_9
+    val cropMode: AspectCropMode = AspectCropMode.RATIO_16_9,
+    val audioEnabled: Boolean = true,
+    val showStatsOverlay: Boolean = true
 ) {
     fun toVideoStreamConfig(displayWidth: Int, displayHeight: Int): VideoStreamConfig {
         val targetShort = resolution.shortSidePx
@@ -71,7 +73,9 @@ class CastSettingsRepository(context: Context) {
             resolution = ResolutionPreset.fromName(prefs.getString(KEY_RESOLUTION, null)),
             fps = prefs.getInt(KEY_FPS, 60),
             bitrateMbps = prefs.getInt(KEY_BITRATE_MBPS, 6),
-            cropMode = AspectCropMode.fromName(prefs.getString(KEY_CROP_MODE, null))
+            cropMode = AspectCropMode.fromName(prefs.getString(KEY_CROP_MODE, null)),
+            audioEnabled = prefs.getBoolean(KEY_AUDIO_ENABLED, true),
+            showStatsOverlay = prefs.getBoolean(KEY_SHOW_OVERLAY, true)
         )
     }
 
@@ -81,6 +85,8 @@ class CastSettingsRepository(context: Context) {
             .putInt(KEY_FPS, settings.fps)
             .putInt(KEY_BITRATE_MBPS, settings.bitrateMbps)
             .putString(KEY_CROP_MODE, settings.cropMode.name)
+            .putBoolean(KEY_AUDIO_ENABLED, settings.audioEnabled)
+            .putBoolean(KEY_SHOW_OVERLAY, settings.showStatsOverlay)
             .apply()
     }
 
@@ -90,5 +96,7 @@ class CastSettingsRepository(context: Context) {
         const val KEY_FPS = "fps"
         const val KEY_BITRATE_MBPS = "bitrate_mbps"
         const val KEY_CROP_MODE = "crop_mode"
+        const val KEY_AUDIO_ENABLED = "audio_enabled"
+        const val KEY_SHOW_OVERLAY = "show_overlay"
     }
 }

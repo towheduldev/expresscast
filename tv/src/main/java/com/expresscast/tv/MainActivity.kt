@@ -6,6 +6,7 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.Window
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -45,6 +46,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.expresscast.shared.ConnectionState
 import com.expresscast.shared.ProtocolInfo
 import com.expresscast.shared.VideoStreamConfig
+import com.expresscast.tv.audio.UdpAudioReceiver
 import com.expresscast.tv.codec.HardwareH264Decoder
 import com.expresscast.tv.network.DiscoveredServer
 import com.expresscast.tv.network.NsdBrowser
@@ -75,6 +77,9 @@ class MainActivity : ComponentActivity() {
                         window = window,
                         config = streamConfig,
                         videoPort = clientState.activeVideoPort,
+                        audioEnabled = clientState.activeAudioEnabled,
+                        audioPort = clientState.activeAudioPort,
+                        showOverlay = clientState.activeShowOverlay,
                         lastRttMs = clientState.lastRttMs,
                         onRequestKeyframe = { controlClient.requestKeyframe() },
                         onDisconnect = { controlClient.disconnect() }
@@ -108,21 +113,35 @@ fun TvStreamingPlayer(
     window: Window,
     config: VideoStreamConfig,
     videoPort: Int,
+    audioEnabled: Boolean,
+    audioPort: Int,
+    showOverlay: Boolean,
     lastRttMs: Long?,
     onRequestKeyframe: () -> Unit,
     onDisconnect: () -> Unit
 ) {
     var decoder by remember { mutableStateOf<HardwareH264Decoder?>(null) }
     var receiver by remember { mutableStateOf<UdpVideoReceiver?>(null) }
+    var audioReceiver by remember { mutableStateOf<UdpAudioReceiver?>(null) }
+    var currentFps by remember { mutableStateOf(0) }
 
-    DisposableEffect(config, videoPort) {
+    BackHandler {
+        onDisconnect()
+    }
+
+    DisposableEffect(config, videoPort, audioEnabled, audioPort) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.setPreferMinimalPostProcessing(true)
+        }
+        if (audioEnabled) {
+            audioReceiver = UdpAudioReceiver(audioPort).also { it.start() }
         }
         onDispose {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 window.setPreferMinimalPostProcessing(false)
             }
+            audioReceiver?.stop()
+            audioReceiver = null
             receiver?.stop()
             receiver = null
             decoder?.stop()
@@ -142,7 +161,11 @@ fun TvStreamingPlayer(
                     keepScreenOn = true
                     holder.addCallback(object : SurfaceHolder.Callback {
                         override fun surfaceCreated(holder: SurfaceHolder) {
-                            val h264Decoder = HardwareH264Decoder(config, holder.surface)
+                            val h264Decoder = HardwareH264Decoder(
+                                config = config,
+                                outputSurface = holder.surface,
+                                onFpsUpdated = { fps -> currentFps = fps }
+                            )
                             decoder = h264Decoder
                             val udpRx = UdpVideoReceiver(
                                 port = videoPort,
@@ -177,27 +200,20 @@ fun TvStreamingPlayer(
             }
         )
 
-        Surface(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(16.dp),
-            color = Color.Black.copy(alpha = 0.65f),
-            shape = MaterialTheme.shapes.medium
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
+        if (showOverlay) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(16.dp),
+                color = Color.Black.copy(alpha = 0.55f),
+                shape = RoundedCornerShape(8.dp)
             ) {
+                val rttText = lastRttMs?.let { "${it}ms" } ?: "—ms"
                 Text(
-                    text = "${config.width}×${config.height}@${config.fps}  •  RTT: ${lastRttMs?.let { "$it ms" } ?: "—"}",
+                    text = "${currentFps}FPS - $rttText",
                     color = Color.White,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                TvActionButton(
-                    text = "Stop",
-                    onClick = onDisconnect,
-                    isPrimary = false
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                 )
             }
         }

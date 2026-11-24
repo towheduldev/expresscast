@@ -16,7 +16,8 @@ import com.expresscast.shared.VideoStreamConfig
  */
 class HardwareH264Decoder(
     config: VideoStreamConfig,
-    outputSurface: Surface
+    outputSurface: Surface,
+    private val onFpsUpdated: ((Int) -> Unit)? = null
 ) {
     private val codec: MediaCodec
     private val lifecycleLock = Any()
@@ -162,6 +163,8 @@ class HardwareH264Decoder(
 
     private fun drainLoop() {
         val bufferInfo = MediaCodec.BufferInfo()
+        var fpsWindowStartMs = System.currentTimeMillis()
+        var fpsWindowFrames = 0
         while (!released) {
             try {
                 val outputIndex = codec.dequeueOutputBuffer(bufferInfo, 10_000L)
@@ -175,6 +178,15 @@ class HardwareH264Decoder(
                         if (render) {
                             codec.releaseOutputBuffer(outputIndex, System.nanoTime())
                             renderedFrames++
+                            fpsWindowFrames++
+                            val now = System.currentTimeMillis()
+                            val elapsed = now - fpsWindowStartMs
+                            if (elapsed >= 1000L) {
+                                val fps = ((fpsWindowFrames * 1000L) / elapsed).toInt()
+                                onFpsUpdated?.invoke(fps)
+                                fpsWindowFrames = 0
+                                fpsWindowStartMs = now
+                            }
                             if (renderedFrames == 1L || renderedFrames % 120L == 0L) {
                                 Log.i(TAG, "Rendered decoded frame #$renderedFrames")
                             }

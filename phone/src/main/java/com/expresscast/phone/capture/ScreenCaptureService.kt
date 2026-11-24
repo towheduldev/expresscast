@@ -1,5 +1,6 @@
 package com.expresscast.phone.capture
 
+import android.Manifest
 import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
@@ -7,6 +8,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -16,6 +18,8 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import androidx.core.content.ContextCompat
+import com.expresscast.phone.audio.AudioCaptureSender
 import com.expresscast.phone.codec.HardwareH264Encoder
 import com.expresscast.phone.network.UdpVideoSender
 import com.expresscast.phone.settings.AspectCropMode
@@ -43,6 +47,7 @@ class ScreenCaptureService : Service() {
     private var cropProcessor: CropSurfaceProcessor? = null
     private var encoder: HardwareH264Encoder? = null
     private var udpSender: UdpVideoSender? = null
+    private var audioSender: AudioCaptureSender? = null
     private var wifiLock: WifiManager.WifiLock? = null
 
     @Volatile
@@ -62,6 +67,8 @@ class ScreenCaptureService : Service() {
                 }
                 val targetHost = intent.getStringExtra(EXTRA_TARGET_HOST)
                 val videoPort = intent.getIntExtra(EXTRA_VIDEO_PORT, NetworkConfig.DEFAULT_VIDEO_PORT)
+                val audioEnabled = intent.getBooleanExtra(EXTRA_AUDIO_ENABLED, true)
+                val audioPort = intent.getIntExtra(EXTRA_AUDIO_PORT, NetworkConfig.DEFAULT_AUDIO_PORT)
                 val streamConfig = VideoStreamConfig(
                     width = intent.getIntExtra(EXTRA_STREAM_WIDTH, VideoStreamConfig.DEFAULT.width),
                     height = intent.getIntExtra(EXTRA_STREAM_HEIGHT, VideoStreamConfig.DEFAULT.height),
@@ -79,7 +86,7 @@ class ScreenCaptureService : Service() {
                 }
 
                 startForegroundWithNotification()
-                startCapturePipeline(resultCode, resultData, targetHost, videoPort, streamConfig, cropMode)
+                startCapturePipeline(resultCode, resultData, targetHost, videoPort, audioEnabled, audioPort, streamConfig, cropMode)
             }
 
             ACTION_REQUEST_KEYFRAME -> {
@@ -127,6 +134,8 @@ class ScreenCaptureService : Service() {
         resultData: Intent,
         targetHost: String,
         videoPort: Int,
+        audioEnabled: Boolean,
+        audioPort: Int,
         requestedConfig: VideoStreamConfig,
         cropMode: AspectCropMode
     ) {
@@ -203,6 +212,20 @@ class ScreenCaptureService : Service() {
                 null
             )
 
+            if (audioEnabled) {
+                val hasAudioPerm = ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.RECORD_AUDIO
+                ) == PackageManager.PERMISSION_GRANTED
+                if (hasAudioPerm) {
+                    audioSender = AudioCaptureSender(projection, targetHost, audioPort).also {
+                        it.start()
+                    }
+                } else {
+                    Log.w(TAG, "RECORD_AUDIO not granted; streaming video without audio")
+                }
+            }
+
             _status.value = CaptureStatus(
                 isStreaming = true,
                 activeConfig = cfg,
@@ -231,6 +254,9 @@ class ScreenCaptureService : Service() {
 
         encoder?.stop()
         encoder = null
+
+        audioSender?.stop()
+        audioSender = null
 
         udpSender?.close()
         udpSender = null
@@ -284,6 +310,8 @@ class ScreenCaptureService : Service() {
         const val EXTRA_RESULT_DATA = "result_data"
         const val EXTRA_TARGET_HOST = "target_host"
         const val EXTRA_VIDEO_PORT = "video_port"
+        const val EXTRA_AUDIO_ENABLED = "audio_enabled"
+        const val EXTRA_AUDIO_PORT = "audio_port"
         const val EXTRA_STREAM_WIDTH = "stream_width"
         const val EXTRA_STREAM_HEIGHT = "stream_height"
         const val EXTRA_STREAM_FPS = "stream_fps"

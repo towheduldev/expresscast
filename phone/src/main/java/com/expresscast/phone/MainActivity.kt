@@ -67,8 +67,8 @@ class MainActivity : ComponentActivity() {
 
     private var currentSettings: CastSettings = CastSettings()
 
-    private val notificationPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
+    private val permissionsLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
     ) {
         launchMediaProjectionPrompt()
     }
@@ -87,6 +87,8 @@ class MainActivity : ComponentActivity() {
                 putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, data)
                 putExtra(ScreenCaptureService.EXTRA_TARGET_HOST, tvHost)
                 putExtra(ScreenCaptureService.EXTRA_VIDEO_PORT, NetworkConfig.DEFAULT_VIDEO_PORT)
+                putExtra(ScreenCaptureService.EXTRA_AUDIO_ENABLED, currentSettings.audioEnabled)
+                putExtra(ScreenCaptureService.EXTRA_AUDIO_PORT, NetworkConfig.DEFAULT_AUDIO_PORT)
                 putExtra(ScreenCaptureService.EXTRA_STREAM_WIDTH, streamConfig.width)
                 putExtra(ScreenCaptureService.EXTRA_STREAM_HEIGHT, streamConfig.height)
                 putExtra(ScreenCaptureService.EXTRA_STREAM_FPS, streamConfig.fps)
@@ -94,7 +96,13 @@ class MainActivity : ComponentActivity() {
                 putExtra(ScreenCaptureService.EXTRA_CROP_MODE, currentSettings.cropMode.name)
             }
             startForegroundService(intent)
-            controlServer.sendStartStream(streamConfig, NetworkConfig.DEFAULT_VIDEO_PORT)
+            controlServer.sendStartStream(
+                config = streamConfig,
+                videoPort = NetworkConfig.DEFAULT_VIDEO_PORT,
+                audioEnabled = currentSettings.audioEnabled,
+                audioPort = NetworkConfig.DEFAULT_AUDIO_PORT,
+                showStatsOverlay = currentSettings.showStatsOverlay
+            )
         }
     }
 
@@ -162,15 +170,20 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestScreenCaptureWithPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val granted = ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.POST_NOTIFICATIONS
-            ) == PackageManager.PERMISSION_GRANTED
-            if (!granted) {
-                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                return
-            }
+        val needed = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            needed.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        if (currentSettings.audioEnabled &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
+        ) {
+            needed.add(Manifest.permission.RECORD_AUDIO)
+        }
+        if (needed.isNotEmpty()) {
+            permissionsLauncher.launch(needed.toTypedArray())
+            return
         }
         launchMediaProjectionPrompt()
     }
@@ -411,6 +424,38 @@ fun PhoneCastScreen(
                             label = { Text("$mbps Mbps") }
                         )
                     }
+                }
+
+                Text("Audio", style = MaterialTheme.typography.labelLarge)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = settings.audioEnabled,
+                        onClick = { onSettingsChanged(settings.copy(audioEnabled = true)) },
+                        enabled = canEditSettings,
+                        label = { Text("Game / Media Audio") }
+                    )
+                    FilterChip(
+                        selected = !settings.audioEnabled,
+                        onClick = { onSettingsChanged(settings.copy(audioEnabled = false)) },
+                        enabled = canEditSettings,
+                        label = { Text("Muted") }
+                    )
+                }
+
+                Text("TV Stats Overlay", style = MaterialTheme.typography.labelLarge)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = settings.showStatsOverlay,
+                        onClick = { onSettingsChanged(settings.copy(showStatsOverlay = true)) },
+                        enabled = canEditSettings,
+                        label = { Text("Show FPS & Latency") }
+                    )
+                    FilterChip(
+                        selected = !settings.showStatsOverlay,
+                        onClick = { onSettingsChanged(settings.copy(showStatsOverlay = false)) },
+                        enabled = canEditSettings,
+                        label = { Text("Off") }
+                    )
                 }
             }
         }

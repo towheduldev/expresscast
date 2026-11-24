@@ -13,6 +13,9 @@ object NetworkConfig {
     /** Default UDP port for low-latency fragmented H.264 video packets. */
     const val DEFAULT_VIDEO_PORT: Int = 47801
 
+    /** Default UDP port for low-latency PCM audio packets. */
+    const val DEFAULT_AUDIO_PORT: Int = 47802
+
     /**
      * Conservative UDP datagram ceiling (bytes) to stay under typical 1500-byte Ethernet/Wi-Fi MTU
      * after IP (20 B) and UDP (8 B) headers without IP fragmentation.

@@ -54,7 +54,10 @@ sealed interface ControlMessage {
 
     data class StartStream(
         val config: VideoStreamConfig,
-        val videoPort: Int = NetworkConfig.DEFAULT_VIDEO_PORT
+        val videoPort: Int = NetworkConfig.DEFAULT_VIDEO_PORT,
+        val audioEnabled: Boolean = true,
+        val audioPort: Int = NetworkConfig.DEFAULT_AUDIO_PORT,
+        val showStatsOverlay: Boolean = true
     ) : ControlMessage
 
     data object StopStream : ControlMessage
@@ -134,6 +137,9 @@ object ControlFraming {
                 body.writeInt(message.config.bitrateBps)
                 body.writeInt(message.config.keyframeIntervalSec)
                 body.writeInt(message.videoPort)
+                body.writeBoolean(message.audioEnabled)
+                body.writeInt(message.audioPort)
+                body.writeBoolean(message.showStatsOverlay)
             }
             ControlMessage.StopStream -> {
                 body.writeByte(TYPE_STOP_STREAM.toInt())
@@ -190,9 +196,15 @@ object ControlFraming {
                 val bitrateBps = input.readInt()
                 val keyframeIntervalSec = input.readInt()
                 val videoPort = input.readInt()
+                val audioEnabled = input.readBoolean()
+                val audioPort = input.readInt()
+                val showStatsOverlay = input.readBoolean()
                 ControlMessage.StartStream(
                     config = VideoStreamConfig(width, height, fps, bitrateBps, keyframeIntervalSec),
-                    videoPort = videoPort
+                    videoPort = videoPort,
+                    audioEnabled = audioEnabled,
+                    audioPort = audioPort,
+                    showStatsOverlay = showStatsOverlay
                 )
             }
             TYPE_STOP_STREAM -> ControlMessage.StopStream

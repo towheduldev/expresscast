@@ -27,7 +27,10 @@ data class TvClientUiState(
     val pairingPin: String = "",
     val lastRttMs: Long? = null,
     val activeStreamConfig: VideoStreamConfig? = null,
-    val activeVideoPort: Int = NetworkConfig.DEFAULT_VIDEO_PORT
+    val activeVideoPort: Int = NetworkConfig.DEFAULT_VIDEO_PORT,
+    val activeAudioEnabled: Boolean = true,
+    val activeAudioPort: Int = NetworkConfig.DEFAULT_AUDIO_PORT,
+    val activeShowOverlay: Boolean = true
 )
 
 /**
@@ -177,11 +180,14 @@ class TvControlClient(
                     is ControlMessage.TextMessage -> Unit
 
                     is ControlMessage.StartStream -> {
-                        Log.i(TAG, "Stream started by phone: ${message.config} on UDP :${message.videoPort}")
+                        Log.i(TAG, "Stream started by phone: ${message.config} on UDP :${message.videoPort}, audio=${message.audioEnabled}:${message.audioPort}")
                         _state.value = _state.value.copy(
                             connectionState = ConnectionState.Streaming,
                             activeStreamConfig = message.config,
-                            activeVideoPort = message.videoPort
+                            activeVideoPort = message.videoPort,
+                            activeAudioEnabled = message.audioEnabled,
+                            activeAudioPort = message.audioPort,
+                            activeShowOverlay = message.showStatsOverlay
                         )
                     }
 

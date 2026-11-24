@@ -133,9 +133,15 @@ class PhoneControlServer(
         }, "ExpressCast-SendPing").start()
     }
 
-    fun sendStartStream(config: VideoStreamConfig, videoPort: Int = NetworkConfig.DEFAULT_VIDEO_PORT) {
+    fun sendStartStream(
+        config: VideoStreamConfig,
+        videoPort: Int = NetworkConfig.DEFAULT_VIDEO_PORT,
+        audioEnabled: Boolean = true,
+        audioPort: Int = NetworkConfig.DEFAULT_AUDIO_PORT,
+        showStatsOverlay: Boolean = true
+    ) {
         Thread({
-            if (sendFrameIfConnected(ControlMessage.StartStream(config, videoPort))) {
+            if (sendFrameIfConnected(ControlMessage.StartStream(config, videoPort, audioEnabled, audioPort, showStatsOverlay))) {
                 _state.value = _state.value.copy(connectionState = ConnectionState.Streaming)
             }
         }, "ExpressCast-StartStream").start()
