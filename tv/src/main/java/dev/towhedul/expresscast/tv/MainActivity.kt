@@ -224,9 +224,9 @@ fun TvStreamingPlayer(
                 color = Color.Black.copy(alpha = 0.55f),
                 shape = RoundedCornerShape(8.dp)
             ) {
-                val rttText = lastRttMs?.let { "$it ms" } ?: "—"
+                val rttText = lastRttMs?.let { "${it}ms" } ?: "—ms"
                 Text(
-                    text = "$currentFps submitted fps · RTT $rttText",
+                    text = "${currentFps}FPS - $rttText",
                     color = Color.White,
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
