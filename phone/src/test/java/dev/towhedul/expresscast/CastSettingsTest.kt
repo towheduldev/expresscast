@@ -30,13 +30,13 @@ class CastSettingsTest {
     }
 
     @Test
-    fun nativeAspectPreservesPortraitOrLandscapeOrientation() {
+    fun nativeAspectUses16By9EncoderCanvasRegardlessOfOrientation() {
         val portrait = CastSettings(
             resolution = ResolutionPreset.P720,
             cropMode = AspectCropMode.NATIVE
         ).toVideoStreamConfig(displayWidth = 1080, displayHeight = 2160)
 
-        assertEquals(720, portrait.width)
-        assertEquals(1440, portrait.height)
+        assertEquals(1280, portrait.width)
+        assertEquals(720, portrait.height)
     }
 }

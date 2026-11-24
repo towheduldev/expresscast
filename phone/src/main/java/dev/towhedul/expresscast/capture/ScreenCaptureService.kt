@@ -200,21 +200,24 @@ class ScreenCaptureService : Service() {
             activeEncodeWidth = cfg.width
             activeEncodeHeight = cfg.height
 
-            val (captureW, captureH, captureSurface) = if (cropMode == AspectCropMode.NATIVE) {
-                Triple(cfg.width, cfg.height, h264Encoder.inputSurface)
-            } else {
-                val (capW, capH) = computeCaptureDimensions(dm.widthPixels, dm.heightPixels, cfg.width, cfg.height)
-                val processor = CropSurfaceProcessor(capW, capH, cfg.width, cfg.height, h264Encoder.inputSurface)
-                cropProcessor = processor
-                Triple(capW, capH, processor.startAndGetInputSurface())
-            }
-            currentCaptureWidth = captureW
-            currentCaptureHeight = captureH
+            val (capW, capH) = computeCaptureDimensions(dm.widthPixels, dm.heightPixels, cfg.width, cfg.height)
+            val processor = CropSurfaceProcessor(
+                captureWidth = capW,
+                captureHeight = capH,
+                encodeWidth = cfg.width,
+                encodeHeight = cfg.height,
+                fitInside = (cropMode == AspectCropMode.NATIVE),
+                encoderInputSurface = h264Encoder.inputSurface
+            )
+            cropProcessor = processor
+            val captureSurface = processor.startAndGetInputSurface()
+            currentCaptureWidth = capW
+            currentCaptureHeight = capH
 
             virtualDisplay = projection.createVirtualDisplay(
                 "ExpressCastDisplay",
-                captureW,
-                captureH,
+                capW,
+                capH,
                 densityDpi,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 captureSurface,
@@ -245,7 +248,7 @@ class ScreenCaptureService : Service() {
                 framesEncoded = 0L,
                 error = null
             )
-            Log.i(TAG, "Capture pipeline started -> $targetHost:$videoPort (capture=${captureW}x${captureH}, encode=${cfg.width}x${cfg.height}@${cfg.fps}, crop=$cropMode)")
+            Log.i(TAG, "Capture pipeline started -> $targetHost:$videoPort (capture=${capW}x${capH}, encode=${cfg.width}x${cfg.height}@${cfg.fps}, crop=$cropMode)")
         } catch (e: Exception) {
             Log.e(TAG, "Failed starting capture pipeline", e)
             stopCapturePipeline()
@@ -311,7 +314,6 @@ class ScreenCaptureService : Service() {
     }
 
     private fun registerOrientationListener() {
-        if (activeCropMode == AspectCropMode.NATIVE) return
         val dm = getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager ?: return
         val listener = object : DisplayManager.DisplayListener {
             override fun onDisplayAdded(displayId: Int) = Unit

@@ -14,6 +14,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -131,6 +133,8 @@ fun TvStreamingPlayer(
     var receiver by remember { mutableStateOf<UdpVideoReceiver?>(null) }
     var audioReceiver by remember { mutableStateOf<UdpAudioReceiver?>(null) }
     var currentFps by remember { mutableIntStateOf(0) }
+    var videoWidth by remember(config) { mutableIntStateOf(config.width) }
+    var videoHeight by remember(config) { mutableIntStateOf(config.height) }
 
     BackHandler {
         onDisconnect()
@@ -156,13 +160,23 @@ fun TvStreamingPlayer(
         }
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
+        val containerAspect = if (maxHeight > 0.dp) maxWidth / maxHeight else (16f / 9f)
+        val videoAspect = videoWidth.toFloat() / videoHeight.coerceAtLeast(1)
+        val (surfaceWidth, surfaceHeight) = if (videoAspect >= containerAspect) {
+            maxWidth to (maxWidth / videoAspect)
+        } else {
+            (maxHeight * videoAspect) to maxHeight
+        }
+
         AndroidView(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .align(Alignment.Center)
+                .size(surfaceWidth, surfaceHeight),
             factory = { context ->
                 SurfaceView(context).apply {
                     keepScreenOn = true
@@ -178,6 +192,14 @@ fun TvStreamingPlayer(
                                 outputSurface = holder.surface,
                                 onFpsUpdated = { fps ->
                                     this@apply.post { if (decoder === h264Decoder) currentFps = fps }
+                                },
+                                onVideoSizeChanged = { w, h ->
+                                    this@apply.post {
+                                        if (decoder === h264Decoder) {
+                                            videoWidth = w
+                                            videoHeight = h
+                                        }
+                                    }
                                 },
                                 onError = onPlaybackError
                             )

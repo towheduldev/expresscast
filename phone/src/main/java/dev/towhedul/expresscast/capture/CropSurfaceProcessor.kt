@@ -21,14 +21,16 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
- * GPU-accelerated [SurfaceTexture] -> [EGLSurface] processor that center-crops
- * a [VirtualDisplay] capture surface onto the H.264 encoder's input [Surface].
+ * GPU-accelerated [SurfaceTexture] -> [EGLSurface] processor that scales a [VirtualDisplay]
+ * capture surface onto the H.264 encoder's input [Surface] using either `CENTER_CROP`
+ * or `FIT_CENTER` ([fitInside] = true for [AspectCropMode.NATIVE]).
  */
 class CropSurfaceProcessor(
     @Volatile private var captureWidth: Int,
     @Volatile private var captureHeight: Int,
     private val encodeWidth: Int,
     private val encodeHeight: Int,
+    private val fitInside: Boolean,
     private val encoderInputSurface: Surface
 ) {
     private val glThread = HandlerThread("ExpressCast-GlCrop").apply { start() }
@@ -173,12 +175,20 @@ class CropSurfaceProcessor(
         Matrix.setIdentityM(mvpMatrix, 0)
         val srcAspect = captureWidth.toFloat() / captureHeight.coerceAtLeast(1)
         val dstAspect = encodeWidth.toFloat() / encodeHeight.coerceAtLeast(1)
-        if (srcAspect > dstAspect) {
-            // Source is wider than target -> scale X up to crop left/right
-            Matrix.scaleM(mvpMatrix, 0, srcAspect / dstAspect, 1f, 1f)
-        } else if (srcAspect < dstAspect) {
-            // Source is taller than target -> scale Y up to crop top/bottom
-            Matrix.scaleM(mvpMatrix, 0, 1f, dstAspect / srcAspect, 1f)
+        if (fitInside) {
+            // FIT_CENTER: keep full source visible inside target canvas with true proportions
+            if (srcAspect > dstAspect) {
+                Matrix.scaleM(mvpMatrix, 0, 1f, dstAspect / srcAspect, 1f)
+            } else if (srcAspect < dstAspect) {
+                Matrix.scaleM(mvpMatrix, 0, srcAspect / dstAspect, 1f, 1f)
+            }
+        } else {
+            // CENTER_CROP: fill target canvas evenly, trimming overflowing edges
+            if (srcAspect > dstAspect) {
+                Matrix.scaleM(mvpMatrix, 0, srcAspect / dstAspect, 1f, 1f)
+            } else if (srcAspect < dstAspect) {
+                Matrix.scaleM(mvpMatrix, 0, 1f, dstAspect / srcAspect, 1f)
+            }
         }
     }
 

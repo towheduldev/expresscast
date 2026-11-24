@@ -15,6 +15,7 @@ class HardwareH264Decoder(
     private val config: VideoStreamConfig,
     private val outputSurface: Surface,
     private val onFpsUpdated: (Int) -> Unit,
+    private val onVideoSizeChanged: (Int, Int) -> Unit = { _, _ -> },
     private val onError: () -> Unit
 ) {
     private data class Frame(val data: ByteArray, val ptsUs: Long, val flags: Int, val enqueuedNs: Long) {
@@ -139,16 +140,40 @@ class HardwareH264Decoder(
                 info,
                 if (frame == null && haveInput && now - lastInputNs < MAX_QUEUE_AGE_NS) 2_000L else 0L
             )
-            if (outputIndex >= 0) {
-                val render = info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0 &&
-                    synchronized(queueLock) { generation == activeGeneration }
-                if (render) {
-                    codec.releaseOutputBuffer(outputIndex, System.nanoTime())
-                    frames++
-                } else {
-                    codec.releaseOutputBuffer(outputIndex, false)
+                when {
+                    outputIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> Unit
+                    outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        val fmt = codec.outputFormat
+                        val w = if (fmt.containsKey("crop-right") && fmt.containsKey("crop-left")) {
+                            fmt.getInteger("crop-right") - fmt.getInteger("crop-left") + 1
+                        } else if (fmt.containsKey(MediaFormat.KEY_WIDTH)) {
+                            fmt.getInteger(MediaFormat.KEY_WIDTH)
+                        } else {
+                            0
+                        }
+                        val h = if (fmt.containsKey("crop-bottom") && fmt.containsKey("crop-top")) {
+                            fmt.getInteger("crop-bottom") - fmt.getInteger("crop-top") + 1
+                        } else if (fmt.containsKey(MediaFormat.KEY_HEIGHT)) {
+                            fmt.getInteger(MediaFormat.KEY_HEIGHT)
+                        } else {
+                            0
+                        }
+                        if (w > 0 && h > 0) {
+                            onVideoSizeChanged(w, h)
+                        }
+                        Log.i(TAG, "Decoder output format changed: ${w}x${h} ($fmt)")
+                    }
+                    outputIndex >= 0 -> {
+                        val render = info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0 &&
+                            synchronized(queueLock) { generation == activeGeneration }
+                        if (render) {
+                            codec.releaseOutputBuffer(outputIndex, System.nanoTime())
+                            frames++
+                        } else {
+                            codec.releaseOutputBuffer(outputIndex, false)
+                        }
+                    }
                 }
-            }
             val elapsed = now - fpsSinceNs
             if (elapsed >= 1_000_000_000L) {
                 val fps = (frames * 1_000_000_000L / elapsed).toInt()

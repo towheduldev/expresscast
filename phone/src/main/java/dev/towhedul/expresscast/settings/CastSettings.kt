@@ -36,24 +36,16 @@ data class CastSettings(
 ) {
     fun toVideoStreamConfig(displayWidth: Int, displayHeight: Int): VideoStreamConfig {
         val targetShort = resolution.shortSidePx
-        val aspect = cropMode.ratio ?: run {
-            val w = displayWidth.coerceAtLeast(1).toFloat()
-            val h = displayHeight.coerceAtLeast(1).toFloat()
-            if (w >= h) w / h else h / w
-        }
+        // NATIVE streams over a 16:9 hardware-compatible canvas with FIT_CENTER scaling so both
+        // portrait and landscape orientations rotate cleanly without squashing or encoder resets.
+        val aspect = cropMode.ratio ?: (16f / 9f)
 
         val encodeHeight = makeEven(targetShort)
         val encodeWidth = makeEven((targetShort * aspect).toInt().coerceAtLeast(2))
 
-        val (finalW, finalH) = if (cropMode == AspectCropMode.NATIVE && displayHeight > displayWidth) {
-            encodeHeight to encodeWidth
-        } else {
-            encodeWidth to encodeHeight
-        }
-
         return VideoStreamConfig(
-            width = finalW,
-            height = finalH,
+            width = encodeWidth,
+            height = encodeHeight,
             fps = fps.coerceIn(1, 120),
             bitrateBps = (bitrateMbps * 1_000_000).coerceIn(1_000_000, 100_000_000),
             keyframeIntervalSec = 2
