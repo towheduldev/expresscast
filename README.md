@@ -16,8 +16,8 @@ Grab the latest signed APKs from [**GitHub Releases**](https://github.com/towhed
 
 | Device | APK | Minimum OS |
 |---|---|---|
-| **Android Phone (Sender)** | `ExpressCast-v1.0.0-release.apk` | Android 10+ (API 29+) |
-| **Android TV / Google TV (Receiver)** | `ExpressCast-TV-v1.0.0-release.apk` | Android TV 8.0+ (API 26+) |
+| **Android Phone (Sender)** | `ExpressCast-v1.1.0-release.apk` | Android 9+ (API 28+, `arm64-v8a` & `armeabi-v7a`; video-only on Android 9) |
+| **Android TV / Google TV (Receiver)** | `ExpressCast-TV-v1.1.0-release.apk` | Android TV 8.0+ (API 26+) |
 
 ---
 
@@ -113,7 +113,7 @@ On Windows PowerShell, replace `./gradlew` with `.\gradlew.bat`.
 - **How do I get the lowest possible latency?**
   Use 5 GHz Wi-Fi (or Ethernet on the TV), enable **Game Mode** in your TV's picture settings if it doesn't switch automatically, and try `720p @ 60 fps` at `6 Mbps`.
 - **Does internal audio capture record microphone noise?**
-  No—ExpressCast uses Android 10+ `AudioPlaybackCaptureConfiguration` to capture internal game/media audio directly, not the microphone.
+  No—ExpressCast uses Android 10+ `AudioPlaybackCaptureConfiguration` to capture internal game/media audio directly, not the microphone. (Android 9 phones stream video-only.)
 
 ---
 

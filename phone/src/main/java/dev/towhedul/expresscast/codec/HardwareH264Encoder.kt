@@ -4,6 +4,7 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.Surface
@@ -64,7 +65,9 @@ class HardwareH264Encoder(
             setInteger(MediaFormat.KEY_BIT_RATE, config.bitrateBps)
             setInteger(MediaFormat.KEY_FRAME_RATE, config.fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, config.keyframeIntervalSec)
-            setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+            }
             setInteger(MediaFormat.KEY_PRIORITY, 0)
             if (includeOperatingRate) {
                 setInteger(MediaFormat.KEY_OPERATING_RATE, (config.fps * 2).coerceAtLeast(120))
@@ -183,7 +186,7 @@ class HardwareH264Encoder(
         fun selectEncoderAndConfig(requested: VideoStreamConfig): Pair<MediaCodecInfo, VideoStreamConfig> {
             val encoders = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
                 .filter { it.isEncoder && it.supportedTypes.any { type -> type.equals(MediaFormat.MIMETYPE_VIDEO_AVC, ignoreCase = true) } }
-                .sortedByDescending { it.isHardwareAccelerated }
+                .sortedByDescending(::isHardwareEncoder)
 
             val candidates = listOf(
                 requested,
@@ -203,6 +206,12 @@ class HardwareH264Encoder(
             val fallbackEncoder = encoders.firstOrNull()
                 ?: throw IllegalStateException("No H.264 encoder available on this device")
             return fallbackEncoder to candidates.last()
+        }
+
+        private fun isHardwareEncoder(info: MediaCodecInfo): Boolean {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) return info.isHardwareAccelerated
+            val name = info.name.lowercase()
+            return !name.startsWith("omx.google.") && !name.startsWith("c2.android.")
         }
     }
 }

@@ -99,7 +99,10 @@ class MainActivity : ComponentActivity() {
                 putExtra(ScreenCaptureService.EXTRA_TARGET_HOST, tvHost)
                 putExtra(ScreenCaptureService.EXTRA_REQUEST_ID, request.id)
                 putExtra(ScreenCaptureService.EXTRA_VIDEO_PORT, NetworkConfig.DEFAULT_VIDEO_PORT)
-                putExtra(ScreenCaptureService.EXTRA_AUDIO_ENABLED, currentSettings.audioEnabled)
+                putExtra(
+                    ScreenCaptureService.EXTRA_AUDIO_ENABLED,
+                    currentSettings.audioEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                )
                 putExtra(ScreenCaptureService.EXTRA_AUDIO_PORT, NetworkConfig.DEFAULT_AUDIO_PORT)
                 putExtra(ScreenCaptureService.EXTRA_STREAM_WIDTH, streamConfig.width)
                 putExtra(ScreenCaptureService.EXTRA_STREAM_HEIGHT, streamConfig.height)
@@ -218,7 +221,8 @@ class MainActivity : ComponentActivity() {
         ) {
             needed.add(Manifest.permission.POST_NOTIFICATIONS)
         }
-        if (currentSettings.audioEnabled &&
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            currentSettings.audioEnabled &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
         ) {
             needed.add(Manifest.permission.RECORD_AUDIO)
@@ -470,19 +474,27 @@ fun PhoneCastScreen(
                     }
                 }
 
+                val audioCaptureSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
                 Text("Audio", style = MaterialTheme.typography.labelLarge)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(
-                        selected = settings.audioEnabled,
+                        selected = audioCaptureSupported && settings.audioEnabled,
                         onClick = { onSettingsChanged(settings.copy(audioEnabled = true)) },
-                        enabled = canEditSettings,
+                        enabled = canEditSettings && audioCaptureSupported,
                         label = { Text("Game / Media Audio") }
                     )
                     FilterChip(
-                        selected = !settings.audioEnabled,
+                        selected = !audioCaptureSupported || !settings.audioEnabled,
                         onClick = { onSettingsChanged(settings.copy(audioEnabled = false)) },
-                        enabled = canEditSettings,
+                        enabled = canEditSettings && audioCaptureSupported,
                         label = { Text("Muted") }
+                    )
+                }
+                if (!audioCaptureSupported) {
+                    Text(
+                        text = "Internal audio capture requires Android 10+ (video-only on Android 9).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 

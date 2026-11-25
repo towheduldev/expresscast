@@ -6,7 +6,9 @@ import android.media.AudioFormat
 import android.media.AudioPlaybackCaptureConfiguration
 import android.media.AudioRecord
 import android.media.projection.MediaProjection
+import android.os.Build
 import android.util.Log
+import androidx.annotation.RequiresApi
 import dev.towhedul.expresscast.shared.AudioPacketHeader
 import dev.towhedul.expresscast.shared.NetworkConfig
 import java.net.DatagramPacket
@@ -15,7 +17,7 @@ import java.net.InetAddress
 import java.nio.ByteBuffer
 
 /**
- * Captures internal device/game audio via [AudioPlaybackCaptureConfiguration]
+ * Captures internal device/game audio via [AudioPlaybackCaptureConfiguration] (Android 10+)
  * and streams 5 ms 48 kHz stereo PCM chunks over UDP.
  */
 class AudioCaptureSender(
@@ -31,6 +33,7 @@ class AudioCaptureSender(
     private var audioRecord: AudioRecord? = null
     private var socket: DatagramSocket? = null
 
+    @RequiresApi(Build.VERSION_CODES.Q)
     @SuppressLint("MissingPermission")
     fun start() {
         if (running) return

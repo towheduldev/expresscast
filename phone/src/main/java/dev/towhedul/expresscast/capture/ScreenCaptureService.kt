@@ -227,16 +227,20 @@ class ScreenCaptureService : Service() {
             registerOrientationListener()
 
             if (audioEnabled) {
-                val hasAudioPerm = ContextCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.RECORD_AUDIO
-                ) == PackageManager.PERMISSION_GRANTED
-                if (hasAudioPerm) {
-                    audioSender = AudioCaptureSender(projection, targetHost, audioPort).also {
-                        it.start()
-                    }
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                    Log.i(TAG, "Internal audio playback capture requires Android 10+; streaming video only")
                 } else {
-                    Log.w(TAG, "RECORD_AUDIO not granted; streaming video without audio")
+                    val hasAudioPerm = ContextCompat.checkSelfPermission(
+                        this,
+                        Manifest.permission.RECORD_AUDIO
+                    ) == PackageManager.PERMISSION_GRANTED
+                    if (hasAudioPerm) {
+                        audioSender = AudioCaptureSender(projection, targetHost, audioPort).also {
+                            it.start()
+                        }
+                    } else {
+                        Log.w(TAG, "RECORD_AUDIO not granted; streaming video without audio")
+                    }
                 }
             }
 
@@ -351,7 +355,13 @@ class ScreenCaptureService : Service() {
         try {
             val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
             if (wifiLock == null) {
-                wifiLock = wifiManager.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "ExpressCast-LowLatency")
+                val lockMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                } else {
+                    @Suppress("DEPRECATION")
+                    WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                }
+                wifiLock = wifiManager.createWifiLock(lockMode, "ExpressCast-LowLatency")
             }
             if (wifiLock?.isHeld == false) {
                 wifiLock?.acquire()
