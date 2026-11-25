@@ -31,10 +31,31 @@ class CropSurfaceProcessor(
     private val encodeWidth: Int,
     private val encodeHeight: Int,
     private val fitInside: Boolean,
-    private val encoderInputSurface: Surface
+    private val encoderInputSurface: Surface,
+    targetFps: Int = 60
 ) {
+    private val frameIntervalNs: Long = if (targetFps in 1 until 60) {
+        1_000_000_000L / targetFps
+    } else {
+        0L
+    }
+    private val minFrameIntervalNs: Long = (frameIntervalNs * 92L) / 100L
+    private var lastRenderedNs: Long = 0L
+    private var lastTextureTimestampNs: Long = 0L
+    private var lastSubmittedPtsNs: Long = 0L
+    private var pendingDraw: Boolean = false
+    private var deferredScheduled: Boolean = false
+
     private val glThread = HandlerThread("ExpressCast-GlCrop").apply { start() }
     private val glHandler = Handler(glThread.looper)
+
+    private val deferredDrawRunnable = Runnable {
+        deferredScheduled = false
+        if (released || !pendingDraw) return@Runnable
+        pendingDraw = false
+        lastRenderedNs = System.nanoTime()
+        drawCurrentTexture(lastTextureTimestampNs)
+    }
 
     private var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
     private var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
@@ -82,9 +103,12 @@ class CropSurfaceProcessor(
     fun release() {
         if (released) return
         released = true
+        glHandler.removeCallbacks(deferredDrawRunnable)
         val latch = CountDownLatch(1)
         glHandler.post {
             try {
+                pendingDraw = false
+                deferredScheduled = false
                 captureSurface?.release()
                 captureSurface = null
                 surfaceTexture?.release()
@@ -197,6 +221,43 @@ class CropSurfaceProcessor(
         try {
             st.updateTexImage()
             st.getTransformMatrix(stMatrix)
+            lastTextureTimestampNs = st.timestamp
+
+            if (minFrameIntervalNs == 0L) {
+                drawCurrentTexture(lastTextureTimestampNs)
+                return
+            }
+
+            val nowNs = System.nanoTime()
+            val elapsedNs = nowNs - lastRenderedNs
+            if (lastRenderedNs == 0L || elapsedNs >= minFrameIntervalNs) {
+                if (deferredScheduled) {
+                    glHandler.removeCallbacks(deferredDrawRunnable)
+                    deferredScheduled = false
+                }
+                pendingDraw = false
+                lastRenderedNs = nowNs
+                drawCurrentTexture(lastTextureTimestampNs)
+            } else {
+                pendingDraw = true
+                if (!deferredScheduled) {
+                    deferredScheduled = true
+                    val delayMs = ((frameIntervalNs - elapsedNs) / 1_000_000L).coerceAtLeast(1L)
+                    glHandler.postDelayed(deferredDrawRunnable, delayMs)
+                }
+            }
+        } catch (e: Exception) {
+            if (!released) {
+                Log.w(TAG, "GL crop frame error: ${e.message}")
+            }
+        }
+    }
+
+    private fun drawCurrentTexture(rawPtsNs: Long) {
+        if (released || eglDisplay == EGL14.EGL_NO_DISPLAY) return
+        try {
+            val ptsNs = maxOf(rawPtsNs, lastSubmittedPtsNs + 1_000L)
+            lastSubmittedPtsNs = ptsNs
 
             GLES20.glViewport(0, 0, encodeWidth, encodeHeight)
             GLES20.glClearColor(0f, 0f, 0f, 1f)
@@ -224,11 +285,11 @@ class CropSurfaceProcessor(
 
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 
-            EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, st.timestamp)
+            EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, ptsNs)
             EGL14.eglSwapBuffers(eglDisplay, eglSurface)
         } catch (e: Exception) {
             if (!released) {
-                Log.w(TAG, "GL crop frame error: ${e.message}")
+                Log.w(TAG, "GL crop draw error: ${e.message}")
             }
         }
     }

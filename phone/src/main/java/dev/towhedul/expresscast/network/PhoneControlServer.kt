@@ -21,7 +21,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
 import java.util.concurrent.Executors
-import kotlin.random.Random
+import java.util.concurrent.TimeUnit
 
 data class PhoneServerUiState(
     val isListening: Boolean = false,
@@ -30,13 +30,17 @@ data class PhoneServerUiState(
     val connectionState: ConnectionState = ConnectionState.Idle,
     val connectedTvName: String? = null,
     val connectedTvAddress: String? = null,
+    val peerCapabilities: ControlMessage.PeerCapabilities? = null,
+    val lastStatsReport: ControlMessage.StreamStatsReport? = null,
+    val negotiatedProtocolVersion: Int = 1,
     val lastRttMs: Long? = null,
     val pairingError: String? = null
 )
 
 /**
  * TCP control server running on the phone.
- * Handles protocol handshake, 4-digit pairing PIN verification, heartbeats, and test messages.
+ * Handles protocol handshake, 4-digit PIN verification, peer capability exchange,
+ * heartbeats, and live stats reports.
  */
 class PhoneControlServer(
     private val deviceName: String = Build.MODEL ?: "Android Phone"
@@ -65,6 +69,9 @@ class PhoneControlServer(
 
     @Volatile
     var onKeyframeRequested: (() -> Unit)? = null
+
+    @Volatile
+    var onStreamStatsReceived: ((ControlMessage.StreamStatsReport) -> Unit)? = null
 
     fun start(port: Int = NetworkConfig.DEFAULT_CONTROL_PORT) {
         if (running) return
@@ -102,12 +109,22 @@ class PhoneControlServer(
         }
     }
 
+    fun refreshLocalIps() {
+        if (!running) return
+        _state.value = _state.value.copy(localIps = discoverLocalIpv4Addresses())
+    }
+
     fun stop() {
         running = false
-        try {
-            sendFrameIfConnected(ControlMessage.Disconnect("Server stopped"))
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed sending disconnect frame during stop: ${e.message}")
+        val out = clientOutput
+        if (out != null && !streamWriter.isShutdown) {
+            try {
+                streamWriter.submit {
+                    sendFrameIfConnected(ControlMessage.Disconnect("Server stopped"), out)
+                }.get(150L, TimeUnit.MILLISECONDS)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed sending disconnect frame during stop: ${e.message}")
+            }
         }
         closeClientSocket()
         try {
@@ -193,6 +210,7 @@ class PhoneControlServer(
         socket.tcpNoDelay = true
         val remoteAddress = socket.inetAddress.hostAddress ?: "unknown"
         var paired = false
+        var negotiatedVersion = 1
 
         try {
             val input = socket.getInputStream()
@@ -203,7 +221,10 @@ class PhoneControlServer(
                 connectionState = ConnectionState.Connecting,
                 connectedTvAddress = remoteAddress,
                 connectedTvName = null,
-                lastRttMs = null
+                peerCapabilities = null,
+                lastStatsReport = null,
+                lastRttMs = null,
+                pairingError = null
             )
 
             while (running && !socket.isClosed) {
@@ -232,11 +253,13 @@ class PhoneControlServer(
                             break
                         }
 
-                        Log.i(TAG, "Handshake Hello from ${message.deviceName} (v${message.protocolVersion})")
+                        negotiatedVersion = ProtocolInfo.negotiatedVersion(message.protocolVersion)
+                        val tvName = message.deviceName.ifBlank { "Android TV" }
+                        Log.i(TAG, "Handshake Hello from $tvName (remote=v${message.protocolVersion}, negotiated=v$negotiatedVersion)")
                         sendFrame(
                             output,
                             ControlMessage.HelloAck(
-                                protocolVersion = ProtocolInfo.PROTOCOL_VERSION,
+                                protocolVersion = negotiatedVersion,
                                 deviceName = deviceName,
                                 accepted = true,
                                 requiresPairing = true
@@ -244,13 +267,20 @@ class PhoneControlServer(
                         )
                         _state.value = _state.value.copy(
                             connectionState = ConnectionState.Pairing,
-                            connectedTvName = message.deviceName
+                            connectedTvName = tvName,
+                            negotiatedProtocolVersion = negotiatedVersion,
+                            localIps = discoverLocalIpv4Addresses()
                         )
                     }
 
                     is ControlMessage.PairResult -> {
                         if (message.accepted) {
                             paired = true
+                            try {
+                                socket.soTimeout = (NetworkConfig.HEARTBEAT_TIMEOUT_MS * 2).toInt()
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Could not set socket timeout: ${e.message}")
+                            }
                             Log.i(TAG, "TV pairing accepted")
                             _state.value = _state.value.copy(
                                 connectionState = ConnectionState.Connected,
@@ -261,6 +291,23 @@ class PhoneControlServer(
                             _state.value = _state.value.copy(
                                 pairingError = "Invalid PIN, please check the TV screen"
                             )
+                        }
+                    }
+
+                    is ControlMessage.PeerCapabilities -> {
+                        if (paired) {
+                            _state.value = _state.value.copy(peerCapabilities = message)
+                            Log.i(
+                                TAG,
+                                "TV capabilities: max=${message.maxWidth}x${message.maxHeight}, 720p@${message.maxFps720p}fps, 1080p@${message.maxFps1080p}fps"
+                            )
+                        }
+                    }
+
+                    is ControlMessage.StreamStatsReport -> {
+                        if (paired) {
+                            _state.value = _state.value.copy(lastStatsReport = message)
+                            onStreamStatsReceived?.invoke(message)
                         }
                     }
 
@@ -310,7 +357,10 @@ class PhoneControlServer(
                     connectionState = ConnectionState.Idle,
                     connectedTvName = null,
                     connectedTvAddress = null,
-                    lastRttMs = null
+                    peerCapabilities = null,
+                    lastStatsReport = null,
+                    lastRttMs = null,
+                    pairingError = null
                 )
             }
         }

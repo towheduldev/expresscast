@@ -65,6 +65,21 @@ sealed interface ControlMessage {
     data object RequestKeyframe : ControlMessage
 
     data class Disconnect(val reason: String = "") : ControlMessage
+
+    data class StreamStatsReport(
+        val windowMs: Int,
+        val framesCompleted: Int,
+        val framesLost: Int,
+        val renderedFps: Int,
+        val rttMs: Int
+    ) : ControlMessage
+
+    data class PeerCapabilities(
+        val maxWidth: Int,
+        val maxHeight: Int,
+        val maxFps720p: Int,
+        val maxFps1080p: Int
+    ) : ControlMessage
 }
 
 /**
@@ -89,6 +104,8 @@ object ControlFraming {
     private const val TYPE_START_STREAM: Byte = 9
     private const val TYPE_STOP_STREAM: Byte = 10
     private const val TYPE_REQUEST_KEYFRAME: Byte = 11
+    private const val TYPE_STREAM_STATS: Byte = 14
+    private const val TYPE_PEER_CAPABILITIES: Byte = 15
 
     fun encode(message: ControlMessage): ByteArray {
         val bodyStream = ByteArrayOutputStream()
@@ -151,6 +168,21 @@ object ControlFraming {
                 body.writeByte(TYPE_DISCONNECT.toInt())
                 body.writeUTF(message.reason)
             }
+            is ControlMessage.StreamStatsReport -> {
+                body.writeByte(TYPE_STREAM_STATS.toInt())
+                body.writeInt(message.windowMs)
+                body.writeInt(message.framesCompleted)
+                body.writeInt(message.framesLost)
+                body.writeInt(message.renderedFps)
+                body.writeInt(message.rttMs)
+            }
+            is ControlMessage.PeerCapabilities -> {
+                body.writeByte(TYPE_PEER_CAPABILITIES.toInt())
+                body.writeInt(message.maxWidth)
+                body.writeInt(message.maxHeight)
+                body.writeInt(message.maxFps720p)
+                body.writeInt(message.maxFps1080p)
+            }
         }
         body.flush()
         return bodyStream.toByteArray()
@@ -210,6 +242,19 @@ object ControlFraming {
             TYPE_STOP_STREAM -> ControlMessage.StopStream
             TYPE_REQUEST_KEYFRAME -> ControlMessage.RequestKeyframe
             TYPE_DISCONNECT -> ControlMessage.Disconnect(input.readUTF())
+            TYPE_STREAM_STATS -> ControlMessage.StreamStatsReport(
+                windowMs = input.readInt(),
+                framesCompleted = input.readInt(),
+                framesLost = input.readInt(),
+                renderedFps = input.readInt(),
+                rttMs = input.readInt()
+            )
+            TYPE_PEER_CAPABILITIES -> ControlMessage.PeerCapabilities(
+                maxWidth = input.readInt(),
+                maxHeight = input.readInt(),
+                maxFps720p = input.readInt(),
+                maxFps1080p = input.readInt()
+            )
             else -> throw IOException("Unknown control message type: $type")
         }
     }

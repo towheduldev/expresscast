@@ -32,11 +32,12 @@ class HardwareH264Encoder(
     private var drainThread: Thread? = null
 
     init {
-        val (codecInfo, selectedConfig) = selectEncoderAndConfig(requestedConfig)
+        val (codecInfo, rawSelectedConfig) = selectEncoderAndConfig(requestedConfig)
+        val selectedConfig = capBitrateForFps(rawSelectedConfig)
         activeConfig = selectedConfig
         Log.i(
             TAG,
-            "Selected H.264 encoder=${codecInfo.name} config=${selectedConfig.width}x${selectedConfig.height}@${selectedConfig.fps}fps"
+            "Selected H.264 encoder=${codecInfo.name} config=${selectedConfig.width}x${selectedConfig.height}@${selectedConfig.fps}fps (${selectedConfig.bitrateBps / 1000} kbps)"
         )
 
         val format = createFormat(codecInfo, selectedConfig, includeOperatingRate = true)
@@ -102,6 +103,20 @@ class HardwareH264Encoder(
             Log.d(TAG, "Requested IDR sync frame")
         } catch (e: Exception) {
             Log.w(TAG, "Failed to request sync frame: ${e.message}")
+        }
+    }
+
+    fun updateBitrate(bitrateBps: Int) {
+        if (!running) return
+        val clamped = bitrateBps.coerceIn(1_000_000, 100_000_000)
+        try {
+            val params = Bundle().apply {
+                putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, clamped)
+            }
+            codec.setParameters(params)
+            Log.d(TAG, "Updated encoder bitrate -> ${clamped / 1000} kbps")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to update encoder bitrate: ${e.message}")
         }
     }
 
@@ -183,6 +198,16 @@ class HardwareH264Encoder(
     companion object {
         private const val TAG = "ExpressCast.H264Enc"
 
+        fun capBitrateForFps(config: VideoStreamConfig): VideoStreamConfig {
+            if (config.fps > 30) return config
+            val maxSafeBps = (config.fps * 33_334L * 8L).toInt().coerceAtLeast(2_000_000)
+            return if (config.bitrateBps > maxSafeBps) {
+                config.copy(bitrateBps = maxSafeBps)
+            } else {
+                config
+            }
+        }
+
         fun selectEncoderAndConfig(requested: VideoStreamConfig): Pair<MediaCodecInfo, VideoStreamConfig> {
             val encoders = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
                 .filter { it.isEncoder && it.supportedTypes.any { type -> type.equals(MediaFormat.MIMETYPE_VIDEO_AVC, ignoreCase = true) } }
@@ -190,8 +215,22 @@ class HardwareH264Encoder(
 
             val candidates = listOf(
                 requested,
-                VideoStreamConfig.HD_720P60,
-                VideoStreamConfig(1280, 720, 30, 8_000_000, requested.keyframeIntervalSec)
+                requested.copy(fps = minOf(requested.fps, 60)),
+                requested.copy(fps = minOf(requested.fps, 30)),
+                VideoStreamConfig(
+                    width = 1280,
+                    height = 720,
+                    fps = minOf(requested.fps, 60),
+                    bitrateBps = minOf(requested.bitrateBps, 6_000_000).coerceAtLeast(1_000_000),
+                    keyframeIntervalSec = requested.keyframeIntervalSec
+                ),
+                VideoStreamConfig(
+                    width = 1280,
+                    height = 720,
+                    fps = minOf(requested.fps, 30),
+                    bitrateBps = minOf(requested.bitrateBps, 4_000_000).coerceAtLeast(1_000_000),
+                    keyframeIntervalSec = requested.keyframeIntervalSec
+                )
             ).distinct()
 
             for (encoder in encoders) {
@@ -206,6 +245,24 @@ class HardwareH264Encoder(
             val fallbackEncoder = encoders.firstOrNull()
                 ?: throw IllegalStateException("No H.264 encoder available on this device")
             return fallbackEncoder to candidates.last()
+        }
+
+        fun querySupportedFps(width: Int, height: Int, candidates: List<Int>): Set<Int> {
+            return try {
+                val encoders = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+                    .filter { it.isEncoder && it.supportedTypes.any { type -> type.equals(MediaFormat.MIMETYPE_VIDEO_AVC, ignoreCase = true) } }
+                    .sortedByDescending(::isHardwareEncoder)
+                val primaryCaps = encoders.firstOrNull()
+                    ?.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                    ?.videoCapabilities
+                    ?: return candidates.filter { it <= 60 }.toSet()
+                candidates.filterTo(LinkedHashSet()) { fps ->
+                    primaryCaps.areSizeAndRateSupported(width, height, fps.toDouble())
+                }.ifEmpty { setOf(15, 30) }
+            } catch (e: Exception) {
+                Log.w(TAG, "Unable to query supported FPS for ${width}x$height: ${e.message}")
+                candidates.filter { it <= 60 }.toSet()
+            }
         }
 
         private fun isHardwareEncoder(info: MediaCodecInfo): Boolean {

@@ -9,6 +9,7 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.SocketTimeoutException
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Owns the receive socket and reassembly state for one playback session. */
 class UdpVideoReceiver(
@@ -27,6 +28,12 @@ class UdpVideoReceiver(
     private var socket: DatagramSocket? = null
 
     private var lastKeyframeRequestNs: Long? = null
+    private val completedWindowCount = AtomicInteger(0)
+    private val lostWindowCount = AtomicInteger(0)
+
+    fun drainWindowStats(): Pair<Int, Int> {
+        return completedWindowCount.getAndSet(0) to lostWindowCount.getAndSet(0)
+    }
 
     fun start() {
         if (running) return
@@ -61,15 +68,27 @@ class UdpVideoReceiver(
                     try {
                         rx.receive(packet)
                     } catch (_: SocketTimeoutException) {
-                        if (reassembler.expireIncompleteFrame()) onPacketLoss()
+                        if (reassembler.expireIncompleteFrame()) {
+                            lostWindowCount.incrementAndGet()
+                            onPacketLoss()
+                        }
                         continue
                     }
                     val now = System.nanoTime()
-                    if (reassembler.expireIncompleteFrame(now)) onPacketLoss()
+                    if (reassembler.expireIncompleteFrame(now)) {
+                        lostWindowCount.incrementAndGet()
+                        onPacketLoss()
+                    }
                     if (packet.length > NetworkConfig.MAX_DATAGRAM_SIZE) continue
                     if (peerAddress != null && packet.address != peerAddress) continue
-                    val result = reassembler.onPacket(buffer, packet.length, now, onPacketLoss)
-                    if (result is ReassemblyResult.Complete) onFrame(result.frame)
+                    val result = reassembler.onPacket(buffer, packet.length, now) {
+                        lostWindowCount.incrementAndGet()
+                        onPacketLoss()
+                    }
+                    if (result is ReassemblyResult.Complete) {
+                        completedWindowCount.incrementAndGet()
+                        onFrame(result.frame)
+                    }
                 }
             }
         } catch (e: Exception) {

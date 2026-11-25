@@ -39,6 +39,8 @@ data class CaptureStatus(
     val requestId: Long = 0L,
     val audioActive: Boolean = false,
     val framesEncoded: Long = 0L,
+    val currentBitrateBps: Int = 0,
+    val targetBitrateBps: Int = 0,
     val error: String? = null
 )
 
@@ -103,6 +105,16 @@ class ScreenCaptureService : Service() {
 
             ACTION_REQUEST_KEYFRAME -> {
                 requestEncoderSync()
+            }
+
+            ACTION_UPDATE_BITRATE -> {
+                val targetBitrateBps = intent.getIntExtra(EXTRA_STREAM_BITRATE, 0)
+                if (targetBitrateBps > 0) {
+                    encoder?.updateBitrate(targetBitrateBps)
+                    _status.update {
+                        if (it.isStreaming) it.copy(currentBitrateBps = targetBitrateBps) else it
+                    }
+                }
             }
 
             ACTION_STOP -> {
@@ -207,7 +219,8 @@ class ScreenCaptureService : Service() {
                 encodeWidth = cfg.width,
                 encodeHeight = cfg.height,
                 fitInside = (cropMode == AspectCropMode.NATIVE),
-                encoderInputSurface = h264Encoder.inputSurface
+                encoderInputSurface = h264Encoder.inputSurface,
+                targetFps = cfg.fps
             )
             cropProcessor = processor
             val captureSurface = processor.startAndGetInputSurface()
@@ -250,6 +263,8 @@ class ScreenCaptureService : Service() {
                 requestId = requestId,
                 audioActive = audioSender?.isRunning == true,
                 framesEncoded = 0L,
+                currentBitrateBps = cfg.bitrateBps,
+                targetBitrateBps = cfg.bitrateBps,
                 error = null
             )
             Log.i(TAG, "Capture pipeline started -> $targetHost:$videoPort (capture=${capW}x${capH}, encode=${cfg.width}x${cfg.height}@${cfg.fps}, crop=$cropMode)")
@@ -389,6 +404,7 @@ class ScreenCaptureService : Service() {
         const val ACTION_START = "dev.towhedul.expresscast.action.START_CAPTURE"
         const val ACTION_STOP = "dev.towhedul.expresscast.action.STOP_CAPTURE"
         const val ACTION_REQUEST_KEYFRAME = "dev.towhedul.expresscast.action.REQUEST_KEYFRAME"
+        const val ACTION_UPDATE_BITRATE = "dev.towhedul.expresscast.action.UPDATE_BITRATE"
 
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_RESULT_DATA = "result_data"
@@ -411,6 +427,14 @@ class ScreenCaptureService : Service() {
         fun requestKeyframe(context: Context) {
             val intent = Intent(context, ScreenCaptureService::class.java).apply {
                 action = ACTION_REQUEST_KEYFRAME
+            }
+            context.startService(intent)
+        }
+
+        fun updateBitrate(context: Context, bitrateBps: Int) {
+            val intent = Intent(context, ScreenCaptureService::class.java).apply {
+                action = ACTION_UPDATE_BITRATE
+                putExtra(EXTRA_STREAM_BITRATE, bitrateBps)
             }
             context.startService(intent)
         }

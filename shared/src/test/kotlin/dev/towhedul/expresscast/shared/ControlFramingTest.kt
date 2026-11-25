@@ -40,7 +40,20 @@ class ControlFramingTest {
             ControlMessage.StartStream(VideoStreamConfig.DEFAULT, NetworkConfig.DEFAULT_VIDEO_PORT),
             ControlMessage.StopStream,
             ControlMessage.RequestKeyframe,
-            ControlMessage.Disconnect("User requested")
+            ControlMessage.Disconnect("User requested"),
+            ControlMessage.StreamStatsReport(
+                windowMs = 1000,
+                framesCompleted = 58,
+                framesLost = 2,
+                renderedFps = 58,
+                rttMs = 12
+            ),
+            ControlMessage.PeerCapabilities(
+                maxWidth = 1920,
+                maxHeight = 1080,
+                maxFps720p = 120,
+                maxFps1080p = 60
+            )
         )
 
         val out = ByteArrayOutputStream()

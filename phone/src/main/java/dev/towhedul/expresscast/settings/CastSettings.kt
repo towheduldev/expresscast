@@ -32,7 +32,8 @@ data class CastSettings(
     val bitrateMbps: Int = 6,
     val cropMode: AspectCropMode = AspectCropMode.RATIO_16_9,
     val audioEnabled: Boolean = true,
-    val showStatsOverlay: Boolean = true
+    val showStatsOverlay: Boolean = true,
+    val adaptiveBitrate: Boolean = true
 ) {
     fun toVideoStreamConfig(displayWidth: Int, displayHeight: Int): VideoStreamConfig {
         val targetShort = resolution.shortSidePx
@@ -47,12 +48,18 @@ data class CastSettings(
             width = encodeWidth,
             height = encodeHeight,
             fps = fps.coerceIn(1, 120),
-            bitrateBps = (bitrateMbps * 1_000_000).coerceIn(1_000_000, 100_000_000),
+            bitrateBps = (bitrateMbps.coerceIn(MIN_BITRATE_MBPS, MAX_BITRATE_MBPS) * 1_000_000)
+                .coerceIn(1_000_000, 100_000_000),
             keyframeIntervalSec = 2
         )
     }
 
     companion object {
+        val FPS_OPTIONS: List<Int> = listOf(15, 30, 60, 90, 120)
+        const val MIN_BITRATE_MBPS: Int = 1
+        const val MAX_BITRATE_MBPS: Int = 30
+        val BITRATE_PRESETS_MBPS: List<Int> = listOf(2, 4, 6, 10, 15, 25)
+
         private fun makeEven(value: Int): Int = (value / 2) * 2
     }
 }
@@ -63,22 +70,25 @@ class CastSettingsRepository(context: Context) {
     fun load(): CastSettings {
         return CastSettings(
             resolution = ResolutionPreset.fromName(prefs.getString(KEY_RESOLUTION, null)),
-            fps = prefs.getInt(KEY_FPS, 60),
-            bitrateMbps = prefs.getInt(KEY_BITRATE_MBPS, 6),
+            fps = prefs.getInt(KEY_FPS, 60).coerceIn(1, 120),
+            bitrateMbps = prefs.getInt(KEY_BITRATE_MBPS, 6)
+                .coerceIn(CastSettings.MIN_BITRATE_MBPS, CastSettings.MAX_BITRATE_MBPS),
             cropMode = AspectCropMode.fromName(prefs.getString(KEY_CROP_MODE, null)),
             audioEnabled = prefs.getBoolean(KEY_AUDIO_ENABLED, true),
-            showStatsOverlay = prefs.getBoolean(KEY_SHOW_OVERLAY, true)
+            showStatsOverlay = prefs.getBoolean(KEY_SHOW_OVERLAY, true),
+            adaptiveBitrate = prefs.getBoolean(KEY_ADAPTIVE_BITRATE, true)
         )
     }
 
     fun save(settings: CastSettings) {
         prefs.edit()
             .putString(KEY_RESOLUTION, settings.resolution.name)
-            .putInt(KEY_FPS, settings.fps)
-            .putInt(KEY_BITRATE_MBPS, settings.bitrateMbps)
+            .putInt(KEY_FPS, settings.fps.coerceIn(1, 120))
+            .putInt(KEY_BITRATE_MBPS, settings.bitrateMbps.coerceIn(CastSettings.MIN_BITRATE_MBPS, CastSettings.MAX_BITRATE_MBPS))
             .putString(KEY_CROP_MODE, settings.cropMode.name)
             .putBoolean(KEY_AUDIO_ENABLED, settings.audioEnabled)
             .putBoolean(KEY_SHOW_OVERLAY, settings.showStatsOverlay)
+            .putBoolean(KEY_ADAPTIVE_BITRATE, settings.adaptiveBitrate)
             .apply()
     }
 
@@ -90,5 +100,6 @@ class CastSettingsRepository(context: Context) {
         const val KEY_CROP_MODE = "crop_mode"
         const val KEY_AUDIO_ENABLED = "audio_enabled"
         const val KEY_SHOW_OVERLAY = "show_overlay"
+        const val KEY_ADAPTIVE_BITRATE = "adaptive_bitrate"
     }
 }

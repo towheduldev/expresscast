@@ -16,6 +16,9 @@ object NetworkConfig {
     /** Default UDP port for low-latency PCM audio packets. */
     const val DEFAULT_AUDIO_PORT: Int = 47802
 
+    /** Default UDP port for LAN discovery beacon fallback when mDNS/NSD is blocked. */
+    const val DEFAULT_DISCOVERY_PORT: Int = 47803
+
     /**
      * Conservative UDP datagram ceiling (bytes) to stay under typical 1500-byte Ethernet/Wi-Fi MTU
      * after IP (20 B) and UDP (8 B) headers without IP fragmentation.
@@ -30,4 +33,7 @@ object NetworkConfig {
 
     /** Elapsed time without a heartbeat before declaring the connection lost. */
     const val HEARTBEAT_TIMEOUT_MS: Long = 3000L
+
+    /** Interval (ms) between TV -> phone stream stats reports for adaptive bitrate. */
+    const val STATS_REPORT_INTERVAL_MS: Long = 1000L
 }

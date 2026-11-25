@@ -5,7 +5,7 @@ package dev.towhedul.expresscast.shared
  */
 object ProtocolInfo {
     /** Current wire protocol version. */
-    const val PROTOCOL_VERSION: Int = 1
+    const val PROTOCOL_VERSION: Int = 2
 
     /** Minimum remote protocol version accepted during handshake. */
     const val MIN_COMPATIBLE_PROTOCOL_VERSION: Int = 1
@@ -19,5 +19,10 @@ object ProtocolInfo {
     /** Returns true when [remoteVersion] falls within our supported protocol range. */
     fun isCompatible(remoteVersion: Int): Boolean {
         return remoteVersion in MIN_COMPATIBLE_PROTOCOL_VERSION..PROTOCOL_VERSION
+    }
+
+    /** Returns the highest protocol version supported by both endpoints. */
+    fun negotiatedVersion(remoteVersion: Int): Int {
+        return minOf(PROTOCOL_VERSION, remoteVersion)
     }
 }

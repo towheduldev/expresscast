@@ -7,6 +7,7 @@ import android.media.MediaFormat
 import android.os.Build
 import android.util.Log
 import android.view.Surface
+import dev.towhedul.expresscast.shared.ControlMessage
 import dev.towhedul.expresscast.shared.VideoPacketHeader
 import dev.towhedul.expresscast.shared.VideoStreamConfig
 
@@ -136,43 +137,56 @@ class HardwareH264Decoder(
             }
 
             val now = System.nanoTime()
-            val outputIndex = codec.dequeueOutputBuffer(
-                info,
-                if (frame == null && haveInput && now - lastInputNs < MAX_QUEUE_AGE_NS) 2_000L else 0L
-            )
-            when {
-                outputIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> Unit
-                outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                    val fmt = codec.outputFormat
-                    val w = if (fmt.containsKey("crop-right") && fmt.containsKey("crop-left")) {
-                        fmt.getInteger("crop-right") - fmt.getInteger("crop-left") + 1
-                    } else if (fmt.containsKey(MediaFormat.KEY_WIDTH)) {
-                        fmt.getInteger(MediaFormat.KEY_WIDTH)
-                    } else {
-                        0
+            // Drain all currently available decoded outputs and render only the latest one
+            // so a temporary GC pause or burst never builds a multi-frame display backlog.
+            var latestOutputIndex = -1
+            var outputTimeoutUs = if (frame == null && haveInput && now - lastInputNs < MAX_QUEUE_AGE_NS) 2_000L else 0L
+            while (true) {
+                val outputIndex = codec.dequeueOutputBuffer(info, outputTimeoutUs)
+                outputTimeoutUs = 0L
+                when {
+                    outputIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> break
+                    outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        val fmt = codec.outputFormat
+                        val w = if (fmt.containsKey("crop-right") && fmt.containsKey("crop-left")) {
+                            fmt.getInteger("crop-right") - fmt.getInteger("crop-left") + 1
+                        } else if (fmt.containsKey(MediaFormat.KEY_WIDTH)) {
+                            fmt.getInteger(MediaFormat.KEY_WIDTH)
+                        } else {
+                            0
+                        }
+                        val h = if (fmt.containsKey("crop-bottom") && fmt.containsKey("crop-top")) {
+                            fmt.getInteger("crop-bottom") - fmt.getInteger("crop-top") + 1
+                        } else if (fmt.containsKey(MediaFormat.KEY_HEIGHT)) {
+                            fmt.getInteger(MediaFormat.KEY_HEIGHT)
+                        } else {
+                            0
+                        }
+                        if (w > 0 && h > 0) {
+                            onVideoSizeChanged(w, h)
+                        }
+                        Log.i(TAG, "Decoder output format changed: ${w}x${h} ($fmt)")
                     }
-                    val h = if (fmt.containsKey("crop-bottom") && fmt.containsKey("crop-top")) {
-                        fmt.getInteger("crop-bottom") - fmt.getInteger("crop-top") + 1
-                    } else if (fmt.containsKey(MediaFormat.KEY_HEIGHT)) {
-                        fmt.getInteger(MediaFormat.KEY_HEIGHT)
-                    } else {
-                        0
+                    outputIndex >= 0 -> {
+                        val validFrame = info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0 &&
+                            info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM == 0 &&
+                            synchronized(queueLock) { generation == activeGeneration }
+                        if (validFrame) {
+                            if (latestOutputIndex >= 0) {
+                                // Drop older already-decoded frame to stay on the newest frame.
+                                codec.releaseOutputBuffer(latestOutputIndex, false)
+                            }
+                            latestOutputIndex = outputIndex
+                        } else {
+                            codec.releaseOutputBuffer(outputIndex, false)
+                        }
                     }
-                    if (w > 0 && h > 0) {
-                        onVideoSizeChanged(w, h)
-                    }
-                    Log.i(TAG, "Decoder output format changed: ${w}x${h} ($fmt)")
+                    else -> break
                 }
-                outputIndex >= 0 -> {
-                    val render = info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0 &&
-                        synchronized(queueLock) { generation == activeGeneration }
-                    if (render) {
-                        codec.releaseOutputBuffer(outputIndex, System.nanoTime())
-                        frames++
-                    } else {
-                        codec.releaseOutputBuffer(outputIndex, false)
-                    }
-                }
+            }
+            if (latestOutputIndex >= 0) {
+                codec.releaseOutputBuffer(latestOutputIndex, System.nanoTime())
+                frames++
             }
             val elapsed = now - fpsSinceNs
             if (elapsed >= 1_000_000_000L) {
@@ -289,10 +303,41 @@ class HardwareH264Decoder(
         return !name.startsWith("omx.google.") && !name.startsWith("c2.android.")
     }
 
-    private companion object {
-        const val TAG = "ExpressCast.H264Dec"
-        const val MIME = MediaFormat.MIMETYPE_VIDEO_AVC
-        const val MAX_PENDING_FRAMES = 3
-        const val MAX_QUEUE_AGE_NS = 50_000_000L
+    companion object {
+        private const val TAG = "ExpressCast.H264Dec"
+        private const val MIME = MediaFormat.MIMETYPE_VIDEO_AVC
+        private const val MAX_PENDING_FRAMES = 3
+        private const val MAX_QUEUE_AGE_NS = 50_000_000L
+
+        fun queryCapabilities(): ControlMessage.PeerCapabilities {
+            return try {
+                val decoders = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+                    .filter { !it.isEncoder && it.supportedTypes.any { type -> type.equals(MIME, ignoreCase = true) } }
+                    .sortedByDescending { info ->
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            info.isHardwareAccelerated
+                        } else {
+                            val name = info.name.lowercase()
+                            !name.startsWith("omx.google.") && !name.startsWith("c2.android.")
+                        }
+                    }
+                val caps = decoders.firstOrNull()?.getCapabilitiesForType(MIME)?.videoCapabilities
+                    ?: return ControlMessage.PeerCapabilities(1920, 1080, 60, 60)
+                val maxWidth = caps.supportedWidths.upper
+                val maxHeight = caps.supportedHeights.upper
+                val fpsCandidates = listOf(120, 90, 60, 30, 15)
+                val max720 = fpsCandidates.firstOrNull { caps.areSizeAndRateSupported(1280, 720, it.toDouble()) } ?: 60
+                val max1080 = fpsCandidates.firstOrNull { caps.areSizeAndRateSupported(1920, 1080, it.toDouble()) } ?: 30
+                ControlMessage.PeerCapabilities(
+                    maxWidth = maxWidth,
+                    maxHeight = maxHeight,
+                    maxFps720p = max720,
+                    maxFps1080p = max1080
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Unable to query TV decoder capabilities: ${e.message}")
+                ControlMessage.PeerCapabilities(1920, 1080, 60, 60)
+            }
+        }
     }
 }
